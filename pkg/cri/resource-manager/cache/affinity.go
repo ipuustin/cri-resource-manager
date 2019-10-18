@@ -23,7 +23,7 @@ import (
 
 const (
 	// SelfReference indicates a container self-referencing value.
-	//SelfReference = "@self:"
+	SelfReference = "@self:"
 
 	// annotation key for specifying container affinity rules
 	keyAffinity = "affinity"
@@ -39,9 +39,12 @@ type podContainerAffinity map[string][]*Affinity
 
 // Affinity specifies a single container affinity.
 type Affinity struct {
-	Scope  *Expression `json:"scope,omitempty"`  // scope for evaluating this affinity
-	Match  *Expression `json:"match"`            // affinity expression
-	Weight int32       `json:"weight,omitempty"` // (optional) weight for this affinity
+	pod       *pod        // owner pod of this affinity
+	name      string      // owner container name of this affinity
+	container *container  // owner container of this affinity
+	Scope     *Expression `json:"scope,omitempty"`  // scope for evaluating this affinity
+	Match     *Expression `json:"match"`            // affinity expression
+	Weight    int32       `json:"weight,omitempty"` // (optional) weight for this affinity
 }
 
 // Expression is used to describe a criteria to select objects within a domain.
@@ -79,6 +82,16 @@ const (
 	// NotExist evalutes to true if the named key does not exist.
 	NotExist Operator = "NotExist"
 )
+
+// Pod returns the owner Pod of the affinity.
+func (a *Affinity) Pod() (Pod, bool) {
+	return a.pod, a.pod != nil
+}
+
+// Container returns the source/container of the affinity.
+func (a *Affinity) Container() (Container, bool) {
+	return a.container, a.container != nil
+}
 
 // Validate checks the affinity for (obvious) invalidity.
 func (a *Affinity) Validate() error {
@@ -183,6 +196,85 @@ func (e *Expression) KeyValue(container Container) (string, bool) {
 	return value, ok
 }
 
+// SelfDereference dereferences a self-reference.
+func (c *container) SelfDereference(path string) (string, error) {
+	if strings.HasPrefix(path, SelfReference) {
+		path = strings.TrimPrefix(path, SelfReference)
+	}
+
+	return resolveRef(c, path)
+}
+
+// refolveRef walks an obejct and a self reference, trying to resolve the latter.
+func resolveRef(obj interface{}, path string) (string, error) {
+	// self reference [@self:]pod/labels/foo.bar.foobar/...
+	ref := strings.Split(path, "/")
+	for {
+		key := ref[0]
+		switch obj.(type) {
+		case *container:
+			c := obj.(*container)
+			switch key {
+			case "pod", "Pod":
+				pod, ok := c.GetPod()
+				if !ok {
+					return "", cacheError("failed to find pod (%s) for container %s",
+						c.PodID, c.Name)
+				}
+				obj = pod
+			case "labels", "Labels":
+				obj = c.Labels
+			case "annotations", "Annotations":
+				obj = c.Annotations
+			case "tags", "Tags":
+				obj = c.Tags
+			case "name", "Name":
+				obj = c.Name
+			case "namespace", "Namespace":
+				obj = c.Namespace
+			case "qosclass", "QOSClass":
+				obj = string(c.QOSClass)
+			}
+		case *pod:
+			p := obj.(*pod)
+			switch key {
+			case "labels", "Labels":
+				obj = p.Labels
+			case "annotations", "Annotations":
+				obj = p.Annotations
+			case "name", "Name":
+				obj = p.Name
+			case "namespace", "Namespace":
+				obj = p.Namespace
+			case "qosclass", "QOSClass":
+				obj = string(p.QOSClass)
+			}
+		case map[string]string:
+			value, ok := obj.(map[string]string)[key]
+			if !ok {
+				return "", cacheError("no member for key %s", key)
+			}
+			obj = value
+
+		default:
+			return "", cacheError("can't handle object of type %T in self reference", obj)
+
+		}
+
+		ref = ref[1:]
+		if len(ref) == 0 {
+			break
+		}
+	}
+
+	str, ok := obj.(string)
+	if !ok {
+		return "", cacheError("selfref path resolved to non-string: %T", path, obj)
+	}
+
+	return str, nil
+}
+
 // String returns the affinity as a string.
 func (a *Affinity) String() string {
 	kind := ""
@@ -199,7 +291,7 @@ func (e *Expression) String() string {
 }
 
 // Try to parse affinities in simplified notation from the given annotation value.
-func (pca *podContainerAffinity) parseSimple(pod Pod, value string, weight int32) bool {
+func (pca *podContainerAffinity) parseSimple(pod *pod, value string, weight int32) bool {
 	parsed := simpleAffinity{}
 	if err := yaml.Unmarshal([]byte(value), &parsed); err != nil {
 		return false
@@ -209,7 +301,10 @@ func (pca *podContainerAffinity) parseSimple(pod Pod, value string, weight int32
 	for name, values := range parsed {
 		(*pca)[name] = append((*pca)[name],
 			&Affinity{
-				Scope: podScope,
+				pod:       pod,
+				name:      name,
+				container: pod.getContainer(name),
+				Scope:     podScope,
 				Match: &Expression{
 					Key:    kubernetes.ContainerNameLabel,
 					Op:     In,
@@ -223,7 +318,7 @@ func (pca *podContainerAffinity) parseSimple(pod Pod, value string, weight int32
 }
 
 // Try to parse affinities in full notation from the given annotation value.
-func (pca *podContainerAffinity) parseFull(pod Pod, value string, weight int32) error {
+func (pca *podContainerAffinity) parseFull(pod *pod, value string, weight int32) error {
 	parsed := podContainerAffinity{}
 	if err := yaml.Unmarshal([]byte(value), &parsed); err != nil {
 		return cacheError("failed to parse affinity annotation '%s': %v", value, err)
@@ -235,20 +330,23 @@ func (pca *podContainerAffinity) parseFull(pod Pod, value string, weight int32) 
 		if !ok {
 			ca = make([]*Affinity, 0, len(pa))
 		}
+
 		for _, a := range pa {
+			a.pod, a.name, a.container = pod, name, pod.getContainer(name)
+
 			if a.Scope == nil {
 				a.Scope = podScope
 			}
 			if a.Weight == 0 {
 				a.Weight = weight
 			}
-
 			if err := a.Validate(); err != nil {
 				return err
 			}
 
 			ca = append(ca, a)
 		}
+
 		(*pca)[name] = ca
 	}
 
