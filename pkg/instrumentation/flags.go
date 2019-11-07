@@ -35,6 +35,12 @@ const (
 	Testing TraceConfig = 1.0
 	// Full is the trace configuration for full probabilistic sampling.
 	Full TraceConfig = 1.0
+	// defaultCollector is the default Jaeger collector endpoint.
+	defaultCollector = "http://localhost:14268/api/traces"
+	// defaultAgent is the default Jeager agent endpoint.
+	defaultAgent = "localhost:6831"
+	// defaultMetrics is the default Prometheus /metrics endpoint.
+	defaultMetrics = ":8888"
 )
 
 // options encapsulates our configurable instrumentation parameters.
@@ -51,6 +57,7 @@ type options struct {
 
 // Our instrumentation options.
 var opt = defaultOptions().(*options)
+var cfg = opt
 
 // MarshalJSON is the JSON marshaller for TraceConfig values.
 func (tc TraceConfig) MarshalJSON() ([]byte, error) {
@@ -129,13 +136,13 @@ func defaultOptions() interface{} {
 	metrics := os.Getenv("PROMETHEUS_ENDPOINT")
 
 	if collector == "" {
-		collector = "http://localhost:14268/api/traces"
+		collector = defaultCollector
 	}
 	if agent == "" {
-		agent = "localhost:6831"
+		agent = defaultAgent
 	}
 	if metrics == "" {
-		metrics = ":8888"
+		metrics = defaultMetrics
 	}
 
 	return &options{
@@ -148,8 +155,18 @@ func defaultOptions() interface{} {
 
 // configNotify is our configuration udpate notification handler.
 func configNotify(event config.Event, source config.Source) error {
-	log.Info("tracing configuration is now %v", opt.Trace)
-	Setup()
+	log.Info("instrumentation configuration is now %v", opt.Trace)
+
+	if opt.Collector == cfg.Collector || opt.Agent == cfg.Agent || opt.Metrics == cfg.Metrics {
+		cfg.Trace = opt.Trace
+		ConfigureTracing(opt.Trace)
+	} else {
+		log.Info("some of the tracing enpoints have changes, trying to restart...")
+		// Hmm... I woder if all of our unregister* in Stop() are properly cleaning up.
+		Stop()
+		Start()
+		*cfg = *opt
+	}
 	return nil
 }
 
