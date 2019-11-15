@@ -1,4 +1,4 @@
-#include <linux/version.h>
+#include <generated/uapi/linux/version.h>
 #include <uapi/linux/bpf.h>
 
 #include <asm/page_types.h>
