@@ -6,6 +6,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"sync"
 	"time"
+	logger "github.com/intel/cri-resource-manager/pkg/log"
 )
 
 type Metric struct {
@@ -18,7 +19,10 @@ type Metric struct {
 	gatherer prometheus.Gatherers
 }
 
-var builtInCollectors map[string]InitCollector
+var (
+    builtInCollectors map[string]InitCollector
+    log = logger.NewLogger("metrics")
+)
 
 type CollectorConfig struct {
 	CgroupPath    string
@@ -44,8 +48,10 @@ func GetDefaultConfig() *CollectorConfig {
 type InitCollector func(config *CollectorConfig) (prometheus.Collector, error)
 
 func RegisterCollector(name string, init InitCollector) error {
+        log.Info("registering collector %s...", name)
+
 	if _, fn := builtInCollectors[name]; fn {
-		return fmt.Errorf("Collector %s already registered", name)
+		return metricsError("Collector %s already registered", name)
 	}
 
 	builtInCollectors[name] = init
@@ -111,11 +117,15 @@ func (m *Metric) run() {
 
 		g, err := m.gatherer.Gather()
 		if err != nil {
-			fmt.Println(err)
+			log.Error("gatherer error: %v", err)
 		}
 
 		for _, mf := range g {
 			m.events <- mf
 		}
 	}
+}
+
+func metricsError(format string, args ...interface{}) error {
+     return fmt.Errorf("metrics: "+format, args...)
 }
