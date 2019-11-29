@@ -1,4 +1,4 @@
-#include <generated/uapi/linux/version.h>
+/*#include <generated/uapi/linux/version.h>*/
 #include <uapi/linux/bpf.h>
 
 #include <asm/page_types.h>
@@ -157,5 +157,14 @@ int tracepoint__x86_fpu_regs_deactivated(struct x86_fpu_args *args)
 }
 
 char _license[] SEC("license") = "GPL";
+
+
+#ifndef KERNEL_VERSION
+#  define KERNEL_VERSION(a,b,c) (((a) << 16) + ((b) << 8) + (c))
+#endif
+
+#ifndef LINUX_VERSION_CODE
+#  define LINUX_VERSION_CODE KERNEL_VERSION(5, 4, 0)
+#endif
 
 unsigned int _version SEC("version") = LINUX_VERSION_CODE;
