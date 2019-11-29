@@ -51,6 +51,7 @@ var (
 		}, nil,
 	)
 
+	// BpfBinaryName is the name of the BPF ELF binary we need to load.
 	BpfBinaryName = "avx512.o"
 
 	// our logger instance
