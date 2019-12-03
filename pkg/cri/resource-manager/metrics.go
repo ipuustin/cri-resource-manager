@@ -24,6 +24,7 @@ import (
 	"github.com/intel/cri-resource-manager/pkg/avx"
 	"github.com/intel/cri-resource-manager/pkg/cri/resource-manager/cache"
 	"github.com/intel/cri-resource-manager/pkg/metrics"
+
 	// pull in all metrics collectors
 	_ "github.com/intel/cri-resource-manager/pkg/metrics/register"
 )
@@ -43,6 +44,7 @@ type avx512Event struct {
 // activateMetricsCollection activates metrics data collection and processing.
 func (m *resmgr) activateMetricsCollection() error {
 	defaults := metrics.GetDefaultConfig()
+	defaults.Cache = &m.cache
 	cgroups = defaults.CgroupPath
 
 	m.metrics = make(chan *model.MetricFamily, 8)

@@ -2,11 +2,13 @@ package metrics
 
 import (
 	"fmt"
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 	"sync"
 	"time"
+
+	"github.com/intel/cri-resource-manager/pkg/cri/resource-manager/cache"
 	logger "github.com/intel/cri-resource-manager/pkg/log"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 type Metric struct {
@@ -20,8 +22,8 @@ type Metric struct {
 }
 
 var (
-    builtInCollectors map[string]InitCollector
-    log = logger.NewLogger("metrics")
+	builtInCollectors map[string]InitCollector
+	log               = logger.NewLogger("metrics")
 )
 
 type CollectorConfig struct {
@@ -29,6 +31,7 @@ type CollectorConfig struct {
 	CgroupFormat  string
 	BpfInstallDir string
 	Period        time.Duration
+	Cache         *cache.Cache
 }
 
 func init() {
@@ -42,13 +45,14 @@ func GetDefaultConfig() *CollectorConfig {
 		CgroupFormat:  "systemd",
 		BpfInstallDir: "/usr/libexec/bpf",
 		Period:        5 * time.Second,
+		Cache:         nil,
 	}
 }
 
 type InitCollector func(config *CollectorConfig) (prometheus.Collector, error)
 
 func RegisterCollector(name string, init InitCollector) error {
-        log.Info("registering collector %s...", name)
+	log.Info("registering collector %s...", name)
 
 	if _, fn := builtInCollectors[name]; fn {
 		return metricsError("Collector %s already registered", name)
@@ -127,5 +131,5 @@ func (m *Metric) run() {
 }
 
 func metricsError(format string, args ...interface{}) error {
-     return fmt.Errorf("metrics: "+format, args...)
+	return fmt.Errorf("metrics: "+format, args...)
 }
