@@ -120,6 +120,7 @@ type Node interface {
 	Distance() []int
 	DistanceFrom(id ID) int
 	MemoryInfo() (*MemInfo, error)
+	GetMemoryType() MemoryType
 }
 
 // Node is a NUMA node.
@@ -745,7 +746,7 @@ func (n *node) MemoryInfo() (*MemInfo, error) {
 }
 
 // GetMemoryType returns the memory type for this node.
-func (n *Node) GetMemoryType() MemoryType {
+func (n *node) GetMemoryType() MemoryType {
 	return n.memoryType
 }
 
