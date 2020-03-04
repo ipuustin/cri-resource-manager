@@ -396,3 +396,89 @@ func TestPoolCreation(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkloadPlacement(t *testing.T) {
+
+	// Do some workloads (containers) and see how they are placed in the
+	// server system.
+
+	// Create a temporary directory for the test data.
+	dir, err := ioutil.TempDir("", "cri-resource-manager-test-sysfs-")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+
+	// Uncompress the test data to the directory.
+	file, err := os.Open(path.Join("testdata", "sysfs.tar.bz2"))
+	if err != nil {
+		panic(err)
+	}
+	err = uncompress(file, dir)
+	if err != nil {
+		panic(err)
+	}
+
+	tcases := []struct {
+		path                    string
+		name                    string
+		expectedRemainingNodes  []int
+		req                     Request
+		affinities              map[int]int32
+		expectedFirstNodeMemory memoryType
+	}{
+		{
+			path: path.Join(dir, "sysfs", "server", "sys"),
+			name: "workload placement on a server system",
+			req: &request{
+				memReq:    10000,
+				memLim:    10000,
+				memType:   memoryUnspec,
+				isolate:   false,
+				full:      10,
+				fraction:  10,
+				container: &mockContainer{},
+			},
+			expectedRemainingNodes: []int{0, 1, 2, 3, 4, 5, 6},
+		},
+	}
+	for _, tc := range tcases {
+		t.Run(tc.name, func(t *testing.T) {
+			sys, err := system.DiscoverSystemAt(tc.path)
+			if err != nil {
+				panic(err)
+			}
+
+			policy := &policy{
+				sys:   sys,
+				cache: &mockCache{},
+			}
+
+			err = policy.buildPoolsByTopology()
+			if err != nil {
+				panic(err)
+			}
+
+			scores, filteredPools := policy.sortPoolsByScore(tc.req, tc.affinities)
+			fmt.Printf("scores: %v, remaining pools: %v\n", scores, filteredPools)
+
+			if len(filteredPools) != len(tc.expectedRemainingNodes) {
+				t.Errorf("Wrong number of nodes in the filtered pool: expected %d but got %d", len(tc.expectedRemainingNodes), len(filteredPools))
+			}
+
+			for _, id := range tc.expectedRemainingNodes {
+				found := false
+				for _, node := range filteredPools {
+					if node.NodeID() == id {
+						fmt.Println("node id:", node.NodeID())
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Did not find id %d in filtered pools: %s", id, filteredPools)
+				}
+			}
+		})
+	}
+}
