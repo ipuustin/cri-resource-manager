@@ -310,10 +310,12 @@ func TestPoolCreation(t *testing.T) {
 	tcases := []struct {
 		path                    string
 		name                    string
-		expectedRemainingNodes  []int
 		req                     Request
 		affinities              map[int]int32
+		expectedRemainingNodes  []int
 		expectedFirstNodeMemory memoryType
+		expectedLeafNodeCPUs    int
+		expectedRootNodeCPUs    int
 	}{
 		{
 			path: path.Join(dir, "sysfs", "desktop", "sys"),
@@ -326,6 +328,8 @@ func TestPoolCreation(t *testing.T) {
 			},
 			expectedRemainingNodes:  []int{0},
 			expectedFirstNodeMemory: memoryUnspec,
+			expectedLeafNodeCPUs:    20,
+			expectedRootNodeCPUs:    20,
 		},
 		{
 			path: path.Join(dir, "sysfs", "server", "sys"),
@@ -338,6 +342,8 @@ func TestPoolCreation(t *testing.T) {
 			},
 			expectedRemainingNodes:  []int{0, 1, 2, 3, 4, 5, 6},
 			expectedFirstNodeMemory: memoryDRAM,
+			expectedLeafNodeCPUs:    28,
+			expectedRootNodeCPUs:    112,
 		},
 		{
 			path: path.Join(dir, "sysfs", "server", "sys"),
@@ -350,6 +356,8 @@ func TestPoolCreation(t *testing.T) {
 			},
 			expectedRemainingNodes:  []int{0, 1, 2, 3, 4, 5, 6},
 			expectedFirstNodeMemory: memoryDRAM | memoryPMEM,
+			expectedLeafNodeCPUs:    28,
+			expectedRootNodeCPUs:    112,
 		},
 	}
 	for _, tc := range tcases {
@@ -367,6 +375,21 @@ func TestPoolCreation(t *testing.T) {
 			err = policy.buildPoolsByTopology()
 			if err != nil {
 				panic(err)
+			}
+
+			if policy.root.GetSupply().SharableCPUs().Size() != tc.expectedRootNodeCPUs {
+				t.Errorf("Expected %d CPUs, got %d", tc.expectedRootNodeCPUs, policy.root.GetSupply().SharableCPUs().Size())
+			}
+
+			for _, p := range policy.pools {
+				if p.IsLeafNode() {
+					if len(p.Children()) != 0 {
+						t.Errorf("Leaf node %v had %d children", p, len(p.Children()))
+					}
+					if p.GetSupply().SharableCPUs().Size()+p.GetSupply().IsolatedCPUs().Size() != tc.expectedLeafNodeCPUs {
+						t.Errorf("Expected %d CPUs, got %d (%s)", tc.expectedLeafNodeCPUs, p.GetSupply().SharableCPUs().Size()+p.GetSupply().IsolatedCPUs().Size(), p.GetSupply())
+					}
+				}
 			}
 
 			scores, filteredPools := policy.sortPoolsByScore(tc.req, tc.affinities)
@@ -420,26 +443,40 @@ func TestWorkloadPlacement(t *testing.T) {
 	}
 
 	tcases := []struct {
-		path                    string
-		name                    string
-		expectedRemainingNodes  []int
-		req                     Request
-		affinities              map[int]int32
-		expectedFirstNodeMemory memoryType
+		path                   string
+		name                   string
+		expectedRemainingNodes []int
+		req                    Request
+		affinities             map[int]int32
+		expectedLeafNode       bool
 	}{
 		{
 			path: path.Join(dir, "sysfs", "server", "sys"),
-			name: "workload placement on a server system",
+			name: "workload placement on a server system 1",
 			req: &request{
 				memReq:    10000,
 				memLim:    10000,
 				memType:   memoryUnspec,
 				isolate:   false,
-				full:      10,
-				fraction:  10,
+				full:      28,
 				container: &mockContainer{},
 			},
 			expectedRemainingNodes: []int{0, 1, 2, 3, 4, 5, 6},
+			expectedLeafNode:       true,
+		},
+		{
+			path: path.Join(dir, "sysfs", "server", "sys"),
+			name: "workload placement on a server system 2",
+			req: &request{
+				memReq:    10000,
+				memLim:    10000,
+				memType:   memoryUnspec,
+				isolate:   false,
+				full:      29,
+				container: &mockContainer{},
+			},
+			expectedRemainingNodes: []int{0, 1, 2, 3, 4, 5, 6},
+			expectedLeafNode:       false,
 		},
 	}
 	for _, tc := range tcases {
@@ -478,6 +515,10 @@ func TestWorkloadPlacement(t *testing.T) {
 				if !found {
 					t.Errorf("Did not find id %d in filtered pools: %s", id, filteredPools)
 				}
+			}
+
+			if filteredPools[0].IsLeafNode() != tc.expectedLeafNode {
+				t.Errorf("Workload should have been placed in a leaf node: %t", tc.expectedLeafNode)
 			}
 		})
 	}
