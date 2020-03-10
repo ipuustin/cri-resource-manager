@@ -74,6 +74,10 @@ func uncompress(file *os.File, dir string) error {
 			if err != nil {
 				return err
 			}
+		} else if header.Typeflag == tar.TypeSymlink {
+			// Create a symlink. Ignore error. FIXME: find out why symlinks aren't created.
+			os.Create(path.Join(dir, header.Name))
+			//_ = os.Symlink(header.Name, header.Linkname)
 		}
 	}
 }
@@ -341,7 +345,7 @@ func TestPoolCreation(t *testing.T) {
 				container: &mockContainer{},
 			},
 			expectedRemainingNodes:  []int{0, 1, 2, 3, 4, 5, 6},
-			expectedFirstNodeMemory: memoryDRAM,
+			expectedFirstNodeMemory: memoryDRAM | memoryPMEM,
 			expectedLeafNodeCPUs:    28,
 			expectedRootNodeCPUs:    112,
 		},
