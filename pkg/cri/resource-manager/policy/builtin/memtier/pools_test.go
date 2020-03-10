@@ -92,10 +92,10 @@ func TestMemoryLimitFiltering(t *testing.T) {
 		name                   string
 		nodes                  []Node
 		numaNodes              []system.Node
-		expectedRemainingNodes []int
 		req                    Request
 		affinities             map[int]int32
 		tree                   map[int][]int
+		expectedRemainingNodes []int
 	}{
 		{
 			name: "single node memory limit (fits)",
@@ -344,7 +344,8 @@ func TestPoolCreation(t *testing.T) {
 				memType:   memoryDRAM,
 				container: &mockContainer{},
 			},
-			expectedRemainingNodes:  []int{0, 1, 2, 3, 4, 5, 6},
+			expectedRemainingNodes: []int{0, 1, 2, 3, 4, 5, 6},
+			// TODO: why not just memoryDRAM?
 			expectedFirstNodeMemory: memoryDRAM | memoryPMEM,
 			expectedLeafNodeCPUs:    28,
 			expectedRootNodeCPUs:    112,
@@ -449,14 +450,14 @@ func TestWorkloadPlacement(t *testing.T) {
 	tcases := []struct {
 		path                   string
 		name                   string
-		expectedRemainingNodes []int
 		req                    Request
 		affinities             map[int]int32
+		expectedRemainingNodes []int
 		expectedLeafNode       bool
 	}{
 		{
 			path: path.Join(dir, "sysfs", "server", "sys"),
-			name: "workload placement on a server system 1",
+			name: "workload placement on a server system leaf node",
 			req: &request{
 				memReq:    10000,
 				memLim:    10000,
@@ -470,7 +471,7 @@ func TestWorkloadPlacement(t *testing.T) {
 		},
 		{
 			path: path.Join(dir, "sysfs", "server", "sys"),
-			name: "workload placement on a server system 2",
+			name: "workload placement on a server system root node",
 			req: &request{
 				memReq:    10000,
 				memLim:    10000,
