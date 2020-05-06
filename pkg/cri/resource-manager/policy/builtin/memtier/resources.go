@@ -179,6 +179,13 @@ type request struct {
 	// go up in the tree starting at the best fitting pool, before assigning
 	// the container to an actual pool. Currently ignored.
 	elevate int
+
+	// coldStart tells the timeout (in milliseconds) how long to wait until
+	// a DRAM memory controller should be added to a container asking for a
+	// mixed DRAM/PMEM memory allocation. This allows for a "cold start" where
+	// initial memory requests are made to the PMEM memory. A value of -1
+	// indicates that cold start is not explicitly requested.
+	coldStart int
 }
 
 var _ Request = &request{}
@@ -600,14 +607,24 @@ func (cs *supply) String() string {
 	return "<" + cs.node.Name() + " CPU: " + none + isolated + sharable + ", Mem: " + mem + ">"
 }
 
-// newRequest creates a new CPU request for the given container.
+// newRequest creates a new request for the given container.
 func newRequest(container cache.Container) Request {
 	pod, _ := container.GetPod()
 	full, fraction, isolate, elevate := cpuAllocationPreferences(pod, container)
-
 	req, lim, mtype := memoryAllocationPreference(pod, container)
+	coldStart := -1
+
 	if mtype == memoryUnspec {
 		mtype = defaultMemoryType
+	}
+
+	if mtype&memoryPMEM == memoryPMEM && mtype&memoryDRAM == memoryDRAM {
+		parsedColdStart, err := coldStartPreference(pod, container)
+		if err != nil {
+			log.Error("Failed to parse cold start preference")
+		} else {
+			coldStart = parsedColdStart
+		}
 	}
 
 	return &request{
@@ -619,6 +636,7 @@ func newRequest(container cache.Container) Request {
 		memLim:    lim,
 		memType:   mtype,
 		elevate:   elevate,
+		coldStart: coldStart,
 	}
 }
 
