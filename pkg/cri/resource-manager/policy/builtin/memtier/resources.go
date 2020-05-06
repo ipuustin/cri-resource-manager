@@ -17,6 +17,7 @@ package memtier
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/kubernetes/pkg/kubelet/cm/cpuset"
@@ -91,6 +92,8 @@ type Request interface {
 	MemoryType() memoryType
 	// MemAmountToAllocate retuns how much memory we need to reserve for a request.
 	MemAmountToAllocate() uint64
+	// ColdStart returns the cold start timeout in milliseconds.
+	ColdStart() int
 }
 
 // Grant represents CPU and memory capacity allocated to a container from a node.
@@ -129,6 +132,13 @@ type Grant interface {
 	// UpdateExtraMemoryReservation() updates the reservations in the subtree
 	// of nodes under the node from which the memory was granted.
 	UpdateExtraMemoryReservation()
+	// RestoreMemset restores the granted memory set to node maximum
+	// and reapplies the grant.
+	RestoreMemset()
+	// AddTimer adds a cold start timer.
+	AddTimer(*time.Timer)
+	// StopTimer stops a cold start timer.
+	StopTimer()
 }
 
 // Score represents how well a supply can satisfy a request.
@@ -192,14 +202,16 @@ var _ Request = &request{}
 
 // grant implements our Grant interface.
 type grant struct {
-	container    cache.Container // container CPU is granted to
-	node         Node            // node CPU is supplied from
-	memoryNode   Node            // node memory is supplied from
-	exclusive    cpuset.CPUSet   // exclusive CPUs
-	portion      int             // milliCPUs granted from shared set
-	memType      memoryType      // requested types of memory
-	memset       system.IDSet    // assigned memory nodes
-	allocatedMem memoryMap       // memory limit
+	container      cache.Container // container CPU is granted to
+	node           Node            // node CPU is supplied from
+	memoryNode     Node            // node memory is supplied from
+	exclusive      cpuset.CPUSet   // exclusive CPUs
+	portion        int             // milliCPUs granted from shared set
+	memType        memoryType      // requested types of memory
+	fullMemType    memoryType      // after a cold start, restore
+	memset         system.IDSet    // assigned memory nodes
+	allocatedMem   memoryMap       // memory limit
+	coldStartTimer *time.Timer
 }
 
 var _ Grant = &grant{}
@@ -359,6 +371,10 @@ func (cs *supply) allocateMemory(cr *request) (memoryMap, error) {
 		}
 	}
 
+	if remaining > 0 && cr.ColdStart() > 0 {
+		return nil, policyError("internal error: not enough memory at %s, short circuit due to cold start", cs.node.Name())
+	}
+
 	if remaining > 0 && memType&memoryDRAM != 0 {
 		available := cs.mem[memoryDRAM] - cs.grantedMem[memoryDRAM]
 		if remaining < available {
@@ -441,7 +457,25 @@ func (cs *supply) Allocate(r Request) (Grant, error) {
 		return nil, err
 	}
 
-	grant := newGrant(cs.node, cr.GetContainer(), exclusive, cr.fraction, cr.memType, allocatedMem)
+	// allocate only limited memory set due to cold start
+	memType := memoryPMEM
+	coldStart := cr.ColdStart()
+	if coldStart <= 0 {
+		memType = cr.memType
+	}
+
+	grant := newGrant(cs.node, cr.GetContainer(), exclusive, cr.fraction, memType, cr.memType, allocatedMem)
+
+	if coldStart > 0 {
+		// start a timer to restore the grant memset to full.
+		duration := time.Duration(int64(coldStart) * int64(time.Millisecond))
+		// TODO: store the timer so that we can release it if the grant is destroyed before the timer elapses
+		timer := time.AfterFunc(duration, func() {
+			log.Info("restoring memset to grant %v", grant)
+			grant.RestoreMemset()
+		})
+		grant.AddTimer(timer)
+	}
 
 	cs.node.DepthFirst(func(n Node) error {
 		n.FreeSupply().AccountAllocate(grant)
@@ -716,6 +750,11 @@ func (cr *request) MemoryType() memoryType {
 	return cr.memType
 }
 
+// ColdStart returns the cold start timeout (in milliseconds).
+func (cr *request) ColdStart() int {
+	return cr.coldStart
+}
+
 // Score collects data for scoring this supply wrt. the given request.
 func (cs *supply) GetScore(req Request) Score {
 	score := &score{
@@ -815,8 +854,8 @@ func (score *score) String() string {
 }
 
 // newGrant creates a CPU grant from the given node for the container.
-func newGrant(n Node, c cache.Container, exclusive cpuset.CPUSet, portion int, mt memoryType, allocatedMem memoryMap) Grant {
-	mems := n.GetMemset(mt)
+func newGrant(n Node, c cache.Container, exclusive cpuset.CPUSet, portion int, initialMt, mt memoryType, allocatedMem memoryMap) Grant {
+	mems := n.GetMemset(initialMt)
 	if mems.Size() == 0 {
 		mems = n.GetMemset(memoryDRAM)
 		if mems.Size() == 0 {
@@ -917,6 +956,13 @@ func (cg *grant) String() string {
 func (cg *grant) Release() {
 	cg.GetCPUNode().FreeSupply().ReleaseCPU(cg)
 	cg.GetMemoryNode().FreeSupply().ReleaseMemory(cg)
+	cg.StopTimer()
+}
+
+func (cg *grant) RestoreMemset() {
+	mems := cg.GetMemoryNode().GetMemset(cg.memType)
+	cg.memset = mems
+	cg.GetMemoryNode().Policy().applyGrant(cg)
 }
 
 func (cg *grant) ExpandMemset() (bool, error) {
@@ -979,4 +1025,14 @@ func (cg *grant) UpdateExtraMemoryReservation() {
 		}
 		return nil
 	})
+}
+
+func (cg *grant) AddTimer(timer *time.Timer) {
+	cg.coldStartTimer = timer
+}
+
+func (cg *grant) StopTimer() {
+	if cg.coldStartTimer != nil {
+		cg.coldStartTimer.Stop()
+	}
 }
