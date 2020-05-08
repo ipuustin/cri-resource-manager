@@ -35,3 +35,8 @@ type Policy struct {
 	// Data is any optional arbitrary data associated with this event.
 	Data interface{}
 }
+
+const (
+	// ContainerStarted is delivered to policies once a StartContainer requests returns.
+	ContainerStarted = "container-started"
+)
