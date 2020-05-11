@@ -36,9 +36,10 @@ func (p *policy) triggerColdStart(c cache.Container) error {
 		return nil
 	}
 
-	// start a timer to restore the grant memset to full.
+	// Start a timer to restore the grant memset to full. Store the
+	// timer so that we can release it if the grant is destroyed before
+	// the timer elapses.
 	duration := time.Duration(int64(coldStart) * int64(time.Millisecond))
-	// TODO: store the timer so that we can release it if the grant is destroyed before the timer elapses
 	timer := time.AfterFunc(duration, func() {
 		e := &events.Policy{
 			Type:   ColdStartDone,

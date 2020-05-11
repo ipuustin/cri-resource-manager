@@ -212,7 +212,6 @@ type grant struct {
 	exclusive      cpuset.CPUSet   // exclusive CPUs
 	portion        int             // milliCPUs granted from shared set
 	memType        memoryType      // requested types of memory
-	fullMemType    memoryType      // after a cold start, restore
 	memset         system.IDSet    // assigned memory nodes
 	allocatedMem   memoryMap       // memory limit
 	coldStart      int
@@ -377,6 +376,8 @@ func (cs *supply) allocateMemory(cr *request) (memoryMap, error) {
 	}
 
 	if remaining > 0 && cr.ColdStart() > 0 {
+		cs.mem[memoryPMEM] += amount - remaining
+		cs.grantedMem[memoryPMEM] = amount - remaining
 		return nil, policyError("internal error: not enough memory at %s, short circuit due to cold start", cs.node.Name())
 	}
 
@@ -411,6 +412,7 @@ func (cs *supply) allocateMemory(cr *request) (memoryMap, error) {
 	}
 
 	if remaining > 0 {
+		// FIXME: restore the already allocated memory to the supply
 		return nil, policyError("internal error: not enough memory at %s", cs.node.Name())
 	}
 
@@ -915,7 +917,7 @@ func (cg *grant) MemoryType() memoryType {
 	return cg.memType
 }
 
-// Memset returns the granted memory controllers as a string.
+// Memset returns the granted memory controllers as an IDSet.
 func (cg *grant) Memset() system.IDSet {
 	return cg.memset
 }
